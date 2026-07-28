@@ -11,3 +11,7 @@ solr/zk/datalog/
 
 # 旧的聚合 data 目录（如果历史遗留有残留也一并忽略）
 data/
+
+# 备份产物
+backup/
+image-bundles/

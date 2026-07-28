@@ -1,0 +1,306 @@
+#!/usr/bin/env bash
+#
+# restore-apps.sh
+#
+# 从 backup/ 恢复某个 app 的数据。
+#
+# 备份文件命名：backup/{appname}-{YYYYmmdd-HHMMSS}.tar.gz
+#
+# 用法:
+#   ./scripts/restore-apps.sh <app>                    # 交互式选择该 app 的某份备份
+#   ./scripts/restore-apps.sh <app> latest             # 恢复最新一份
+#   ./scripts/restore-apps.sh <app> <backup-file>      # 指定文件（绝对/相对/仅文件名）
+#   ./scripts/restore-apps.sh -l                       # 列出所有备份
+#   ./scripts/restore-apps.sh -l mysql                 # 列出 mysql 的备份
+#
+# 选项:
+#   --stop          恢复前 docker compose stop，恢复后再 start
+#   --no-safety     恢复前不再备份当前数据（默认会先把现存数据打包到 backup/pre-restore-*）
+#   -y, --yes       跳过所有确认
+#   -o, --output    backup 目录（默认 <project>/backup）
+#   -h, --help      显示帮助
+#
+
+set -euo pipefail
+
+# 与 backup-apps.sh 保持一致
+declare -A APP_PATHS=(
+  [consul]="consul/data"
+  [danmu-server]="danmu-server/config"
+  [elasticsearch]="elasticsearch/data"
+  [h2]="h2/data"
+  [kafka]="kafka/data"
+  [mysql]="mysql/data"
+  [nexus]="nexus/data"
+  [solr]="solr/data solr/zk/data solr/zk/datalog"
+)
+
+declare -A APP_COMPOSE=(
+  [consul]="docker-compose-consul.yml"
+  [danmu-server]="docker-compose-danmu-server.yml"
+  [elasticsearch]="docker-compose-elasticsearch.yml"
+  [h2]="docker-compose-h2.yml"
+  [kafka]="docker-compose-kafka.yml"
+  [mysql]="docker-compose-mysql.yml"
+  [nexus]="docker-compose-nexus.yml"
+  [solr]="docker-compose-solr.yml"
+)
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BACKUP_DIR="$PROJECT_ROOT/backup"
+
+DO_STOP=0
+DO_SAFETY=1
+ASSUME_YES=0
+LIST_ONLY=0
+POSITIONAL=()
+
+log()  { echo -e "\033[1;32m[INFO]\033[0m  $*"; }
+warn() { echo -e "\033[1;33m[WARN]\033[0m  $*"; }
+err()  { echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; }
+
+usage() {
+  cat <<EOF
+用法: $0 [选项] <app> [<备份文件|latest>]
+      $0 -l [<app>]
+
+选项:
+  --stop           恢复前 docker compose stop，恢复后再 start
+  --no-safety      跳过"恢复前先把现有数据打包保存"这一步
+  -y, --yes        跳过所有确认
+  -o, --output DIR backup 目录（默认 <project>/backup）
+  -l, --list       列出备份（可指定 app）
+  -h, --help       显示帮助
+
+可用的 app: ${!APP_PATHS[@]}
+
+示例:
+  $0 -l                             # 列出所有备份
+  $0 -l mysql                       # 列出 mysql 的所有备份
+  $0 mysql                          # 交互式选择 mysql 的某份备份
+  $0 mysql latest --stop            # 恢复 mysql 最新备份，恢复前后自动停/启容器
+  $0 nexus nexus-20260728-153000.tar.gz -y
+EOF
+  exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --stop)         DO_STOP=1; shift ;;
+    --no-safety)    DO_SAFETY=0; shift ;;
+    -y|--yes)       ASSUME_YES=1; shift ;;
+    -o|--output)    BACKUP_DIR="$2"; shift 2 ;;
+    -l|--list)      LIST_ONLY=1; shift ;;
+    -h|--help)      usage ;;
+    -*)             err "未知选项: $1"; exit 1 ;;
+    *)              POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+# --- list 模式 ---
+if [[ "$LIST_ONLY" -eq 1 ]]; then
+  filter_app="${POSITIONAL[0]:-}"
+  if [[ ! -d "$BACKUP_DIR" ]]; then
+    warn "备份目录不存在: $BACKUP_DIR"; exit 0
+  fi
+  if [[ -n "$filter_app" ]]; then
+    pattern="$BACKUP_DIR/${filter_app}-*.tar.gz"
+    log "$filter_app 的备份文件（新 -> 旧）:"
+  else
+    pattern="$BACKUP_DIR/*.tar.gz"
+    log "所有备份文件（新 -> 旧）:"
+  fi
+  # shellcheck disable=SC2086
+  files=$(ls -1t $pattern 2>/dev/null || true)
+  if [[ -z "$files" ]]; then
+    warn "没有找到匹配的备份"; exit 0
+  fi
+  printf "%-4s %-45s %-10s %s\n" "No." "文件" "大小" "时间"
+  echo "--------------------------------------------------------------------------------"
+  i=0
+  while IFS= read -r f; do
+    i=$((i+1))
+    size="$(du -h "$f" | awk '{print $1}')"
+    mtime="$(date -r "$f" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || stat -c '%y' "$f" 2>/dev/null | cut -d. -f1)"
+    printf "%-4s %-45s %-10s %s\n" "$i" "$(basename "$f")" "$size" "$mtime"
+  done <<< "$files"
+  exit 0
+fi
+
+# --- restore 模式 ---
+if [[ ${#POSITIONAL[@]} -lt 1 ]]; then
+  err "必须指定 <app>"
+  usage
+fi
+
+APP="${POSITIONAL[0]}"
+CHOICE="${POSITIONAL[1]:-}"
+
+if [[ -z "${APP_PATHS[$APP]:-}" ]]; then
+  err "未知的 app: $APP"
+  err "可用: ${!APP_PATHS[@]}"
+  exit 1
+fi
+
+if [[ ! -d "$BACKUP_DIR" ]]; then
+  err "备份目录不存在: $BACKUP_DIR"; exit 1
+fi
+
+# 解析要恢复的文件
+resolve_backup_file() {
+  local sel="$1"
+  local pattern="$BACKUP_DIR/${APP}-*.tar.gz"
+
+  if [[ -z "$sel" ]]; then
+    # 交互式选择
+    # shellcheck disable=SC2086
+    mapfile -t list < <(ls -1t $pattern 2>/dev/null || true)
+    if [[ ${#list[@]} -eq 0 ]]; then
+      err "$APP 没有任何备份"
+      return 1
+    fi
+    echo "请选择要恢复的 $APP 备份：" >&2
+    local i=0
+    for f in "${list[@]}"; do
+      i=$((i+1))
+      local size mtime
+      size="$(du -h "$f" | awk '{print $1}')"
+      mtime="$(date -r "$f" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || stat -c '%y' "$f" 2>/dev/null | cut -d. -f1)"
+      printf "  [%s] %s  %s  %s\n" "$i" "$(basename "$f")" "$size" "$mtime" >&2
+    done
+    local idx=""
+    read -r -p "输入序号 (1-${#list[@]}): " idx </dev/tty
+    if ! [[ "$idx" =~ ^[0-9]+$ ]] || (( idx < 1 || idx > ${#list[@]} )); then
+      err "无效的序号: $idx"
+      return 1
+    fi
+    echo "${list[$((idx-1))]}"
+    return 0
+  fi
+
+  if [[ "$sel" == "latest" ]]; then
+    # shellcheck disable=SC2086
+    local latest
+    latest="$(ls -1t $pattern 2>/dev/null | head -1 || true)"
+    if [[ -z "$latest" ]]; then
+      err "$APP 没有任何备份"; return 1
+    fi
+    echo "$latest"
+    return 0
+  fi
+
+  # 显式文件名
+  if [[ -f "$sel" ]]; then
+    echo "$sel"; return 0
+  fi
+  if [[ -f "$BACKUP_DIR/$sel" ]]; then
+    echo "$BACKUP_DIR/$sel"; return 0
+  fi
+  err "找不到备份文件: $sel"
+  return 1
+}
+
+BACKUP_FILE="$(resolve_backup_file "$CHOICE")" || exit 1
+log "将从此备份恢复: $BACKUP_FILE"
+
+# 校验文件名前缀跟 app 匹配（防止误操作）
+base="$(basename "$BACKUP_FILE")"
+if [[ "$base" != "${APP}-"*".tar.gz" && "$base" != "pre-restore-${APP}-"*".tar.gz" ]]; then
+  warn "文件名 $base 与 app '$APP' 不匹配"
+  if [[ "$ASSUME_YES" -eq 0 ]]; then
+    read -r -p "仍然继续? [y/N]: " ans </dev/tty
+    [[ "${ans,,}" != "y" && "${ans,,}" != "yes" ]] && { log "已取消"; exit 0; }
+  fi
+fi
+
+# 展示将会覆盖的路径
+PATHS="${APP_PATHS[$APP]}"
+echo
+log "将覆盖以下目录（相对 $PROJECT_ROOT）："
+for p in $PATHS; do
+  full="$PROJECT_ROOT/$p"
+  if [[ -e "$full" ]]; then
+    echo "  - $p  (已存在)"
+  else
+    echo "  - $p  (不存在，将会新建)"
+  fi
+done
+
+if [[ "$ASSUME_YES" -eq 0 ]]; then
+  echo
+  read -r -p "确认恢复? 这会覆盖现有数据 [y/N]: " ans </dev/tty
+  [[ "${ans,,}" != "y" && "${ans,,}" != "yes" ]] && { log "已取消"; exit 0; }
+fi
+
+# 检测 compose
+COMPOSE_CMD=""
+COMPOSE_FILE="${APP_COMPOSE[$APP]:-}"
+if [[ "$DO_STOP" -eq 1 ]]; then
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD="docker compose"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE_CMD="docker-compose"
+  else
+    err "启用了 --stop 但未找到 docker compose"
+    exit 1
+  fi
+fi
+
+# 1) 停容器
+stopped=0
+if [[ "$DO_STOP" -eq 1 && -n "$COMPOSE_FILE" && -f "$PROJECT_ROOT/$COMPOSE_FILE" ]]; then
+  log "停止 $APP 容器..."
+  (cd "$PROJECT_ROOT" && $COMPOSE_CMD -f "$COMPOSE_FILE" stop) || warn "停止失败，继续恢复"
+  stopped=1
+fi
+
+# 2) 安全备份当前数据
+if [[ "$DO_SAFETY" -eq 1 ]]; then
+  SAFETY_TS="$(date +%Y%m%d-%H%M%S)"
+  SAFETY_FILE="$BACKUP_DIR/pre-restore-${APP}-${SAFETY_TS}.tar.gz"
+  existing=()
+  for p in $PATHS; do
+    [[ -e "$PROJECT_ROOT/$p" ]] && existing+=("$p")
+  done
+  if [[ ${#existing[@]} -gt 0 ]]; then
+    log "安全备份当前数据到: $SAFETY_FILE"
+    ( cd "$PROJECT_ROOT" && tar -czf "$SAFETY_FILE" "${existing[@]}" ) \
+      || warn "安全备份失败，但会继续恢复"
+  else
+    log "当前无数据，跳过安全备份"
+  fi
+else
+  warn "已跳过安全备份 (--no-safety)"
+fi
+
+# 3) 清空目标目录
+for p in $PATHS; do
+  full="$PROJECT_ROOT/$p"
+  if [[ -e "$full" ]]; then
+    log "清空: $p"
+    # 使用 find 删除内容而不删目录本身，避免宿主机上的挂载点变化
+    find "$full" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  else
+    log "创建: $p"
+    mkdir -p "$full"
+  fi
+done
+
+# 4) 解压恢复
+log "解压 $BACKUP_FILE -> $PROJECT_ROOT"
+tar -xzf "$BACKUP_FILE" -C "$PROJECT_ROOT"
+
+# 5) 重启容器
+if [[ "$stopped" -eq 1 ]]; then
+  log "启动 $APP 容器..."
+  (cd "$PROJECT_ROOT" && $COMPOSE_CMD -f "$COMPOSE_FILE" start) || warn "启动失败，请手动检查"
+fi
+
+log "恢复完成 ✅"
+log "  app:    $APP"
+log "  source: $BACKUP_FILE"
+if [[ "$DO_SAFETY" -eq 1 && -n "${SAFETY_FILE:-}" && -f "$SAFETY_FILE" ]]; then
+  log "  回滚:   若需回滚，可执行"
+  echo "         ./scripts/restore-apps.sh --no-safety $APP $(basename "$SAFETY_FILE")"
+fi

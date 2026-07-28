@@ -1,4 +1,31 @@
 services:
+  danmu-mysql:
+    image: mysql:8.0.31
+    hostname: danmu-mysql
+    restart: unless-stopped
+    environment:
+      # !!! 重要：请务必替换为您的强密码 !!!
+      MYSQL_ROOT_PASSWORD: "rikei@1234"                  #数据库root密码
+      MYSQL_DATABASE: "danmuapi"                                        #数据库名称
+      MYSQL_USER: "danmuapi"                                            #数据库用户名
+      MYSQL_PASSWORD: "rikei@1234"                       #数据库密码
+      TZ: "Asia/Shanghai"
+    volumes:
+      - ./danmu-server/db-data:/var/lib/mysql
+    command:
+      - '--character-set-server=utf8mb4'
+      - '--collation-server=utf8mb4_unicode_ci'
+      - '--binlog_expire_logs_seconds=259200' # 自动清理超过3天的binlog日志
+      - '--default-authentication-plugin=mysql_native_password' # 使用传统密码认证方式
+    healthcheck:
+      # 使用mysqladmin ping命令进行健康检查，通过环境变量引用密码
+      test: ["CMD-SHELL", "mysqladmin ping -u$${MYSQL_USER} -p$${MYSQL_PASSWORD}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+    networks:
+      - docker-kit-network
   danmu-server:
     image: l429609201/misaka_danmu_server:v2.8.3
     restart: unless-stopped
@@ -10,12 +37,12 @@ services:
       # --- 数据库连接配置 ---
       - DANMUAPI_DATABASE__TYPE=mysql
       # 容器间通过统一 Docker network 访问 mysql 服务名，端口使用容器内部端口
-      - DANMUAPI_DATABASE__HOST=mysql
+      - DANMUAPI_DATABASE__HOST=danmu-mysql
       - DANMUAPI_DATABASE__PORT=3306
       - DANMUAPI_DATABASE__NAME=danmuapi
       # !!! 重要：请使用上面mysql容器相同的用户名和密码 !!!
       - DANMUAPI_DATABASE__USER=danmuapi
-      - DANMUAPI_DATABASE__PASSWORD=rikei1234
+      - DANMUAPI_DATABASE__PASSWORD=rikei@1234
       # --- 缓存配置（可选）---
       # 默认使用 hybrid 模式（内存 L1 + 数据库 L2），无需额外服务
       # 可选后端: memory（纯内存）/ redis / database（纯数据库）/ hybrid（默认）
@@ -29,7 +56,7 @@ services:
       # --- 初始管理员配置 ---
       - DANMUAPI_ADMIN__INITIAL_USER=admin
     volumes:
-      - ./danmu-server/config:/app/config
+      - ./danmu-server/app-data:/app/config
       # Docker 套接字映射 - 用于一键更新功能
       - /var/run/docker.sock:/var/run/docker.sock
     ports:

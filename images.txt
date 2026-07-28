@@ -1,0 +1,34 @@
+# docker-kit 使用的所有镜像
+# 一行一个，# 开头为注释
+# 用于 scripts/docker-image-export.sh -f images.txt 打包离线传输
+#
+# 来源：docker-compose-*.yml 中所有 image: 字段
+
+# --- Consul ---
+#hashicorp/consul:1.22.7
+
+# --- Kafka ---
+#bitnamilegacy/kafka:3.8.1
+
+# --- Elasticsearch / Kibana ---
+#elasticsearch:8.19.14
+#kibana:8.19.14
+
+# --- MySQL ---
+mysql:8.0.31
+
+# --- H2 ---
+#oscarfonts/h2:2.3.232
+
+# --- Nginx ---
+#nginx:1.30.3-alpine
+
+# --- Nexus ---
+sonatype/nexus3:3.94.0
+
+# --- Solr + ZooKeeper ---
+#solr:8.11.2
+#zookeeper:3.9.3
+
+# --- Danmu Server ---
+l429609201/misaka_danmu_server:v2.8.3
