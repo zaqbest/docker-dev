@@ -9,6 +9,7 @@
 
 > 备份目录默认：项目根下的 `backup/`（已加入 `.gitignore`）
 > 时间戳格式：`YYYYmmdd-HHMMSS`（例如 `mysql-20260728-153000.tar.gz`）
+> 兼容 bash 3.2（macOS 自带），无需安装新 bash。
 
 ---
 
@@ -19,7 +20,7 @@
 | app            | 数据路径                                              | Compose 文件 |
 | -------------- | ----------------------------------------------------- | ------------ |
 | consul         | `consul/data`                                         | docker-compose-consul.yml |
-| danmu-server   | `danmu-server/config`                                 | docker-compose-danmu-server.yml |
+| danmu-server   | `danmu-server/app-data`  `danmu-server/db-data`       | docker-compose-danmu-server.yml |
 | elasticsearch  | `elasticsearch/data`                                  | docker-compose-elasticsearch.yml |
 | h2             | `h2/data`                                             | docker-compose-h2.yml |
 | kafka          | `kafka/data`                                          | docker-compose-kafka.yml |
@@ -178,10 +179,6 @@ scp backup/*.tar.gz user@B:/path/to/docker-kit/backup/
 
 在机器 B（已有相同的 docker-compose 环境，容器可未启动）：
 ```bash
-./scripts/restore-apps.sh mysql latest -y
-./scripts/restore-apps.sh nexus latest -y
-./scripts/restore-apps.sh elasticsearch latest -y
-# ... 或者写个循环
 for app in mysql nexus elasticsearch consul solr h2 kafka danmu-server; do
   ./scripts/restore-apps.sh "$app" latest -y --no-safety
 done
@@ -199,3 +196,4 @@ docker compose -f docker-compose-mysql.yml up -d
 2. **权限**：解压后的文件属主可能是宿主机的用户，如果容器内进程需要特定 UID（比如 elasticsearch 是 1000），恢复后可能要 `chown -R 1000:0 elasticsearch/data`。
 3. **备份加密**：脚本没做加密。如果 backup 目录会流出机器，请自行 `gpg -c` 或放到加密卷。
 4. **大小估算**：`nexus/data`、`elasticsearch/data` 可能很大，注意磁盘空间。
+5. **danmu-server** 同时有 `app-data`（配置）和 `db-data`（自带 MySQL 数据），两者会一起打包到同一个 tar.gz。
