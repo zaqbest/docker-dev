@@ -17,6 +17,20 @@ services:
       - '--collation-server=utf8mb4_unicode_ci'
       - '--binlog_expire_logs_seconds=259200' # 自动清理超过3天的binlog日志
       - '--default-authentication-plugin=mysql_native_password' # 使用传统密码认证方式
+      # --- 2GB 小内存服务器稳定性配置 ---
+      - '--innodb_buffer_pool_size=192M'       # InnoDB 缓冲池：控制 MySQL 主要内存占用
+      - '--innodb_log_file_size=32M'           # 日志文件大小：兼顾写入性能和小内存场景
+      - '--innodb_log_buffer_size=8M'          # 日志缓冲区：降低常驻内存
+      - '--max_connections=40'                 # 限制连接数，避免连接过多导致 OOM
+      - '--table_open_cache=128'               # 降低表缓存占用
+      - '--performance_schema=OFF'             # 关闭性能监控，节省内存
+      - '--innodb_flush_log_at_trx_commit=2'   # 提升性能，异常断电时最多丢失约1秒事务
+      - '--innodb_flush_method=O_DIRECT'       # 减少 OS 页缓存双重占用
+      - '--max_allowed_packet=64M'             # 避免较大写入包导致连接断开
+      - '--wait_timeout=600'                   # 及时释放空闲连接，降低连接内存占用
+      - '--interactive_timeout=600'            # 及时释放交互式空闲连接
+      - '--net_read_timeout=120'               # 网络读取超时
+      - '--net_write_timeout=120'              # 网络写入超时
     healthcheck:
       # 使用mysqladmin ping命令进行健康检查，通过环境变量引用密码
       test: ["CMD-SHELL", "mysqladmin ping -u$${MYSQL_USER} -p$${MYSQL_PASSWORD}"]
@@ -26,6 +40,7 @@ services:
       start_period: 30s
     networks:
       - docker-kit-network
+    mem_limit: 512m
   danmu-server:
     image: l429609201/misaka_danmu_server:v2.8.3
     restart: unless-stopped
