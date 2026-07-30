@@ -4,14 +4,16 @@
 #
 # 从 backup/ 恢复某个 app 的数据。
 # 备份文件命名：backup/{appname}-{YYYYmmdd-HHMMSS}.tar.gz
+#              backup/pre-restore-{appname}-{YYYYmmdd-HHMMSS}.tar.gz
 #
 # 兼容 bash 3.2（macOS 自带），不使用关联数组。
 #
 # 用法:
-#   ./scripts/restore-apps.sh <app>                # 交互式选择
-#   ./scripts/restore-apps.sh <app> latest         # 恢复最新一份
-#   ./scripts/restore-apps.sh <app> <backup-file>  # 指定文件
-#   ./scripts/restore-apps.sh -l [<app>]           # 列出备份
+#   ./scripts/restore-apps.sh <app>                       # 交互式选择
+#   ./scripts/restore-apps.sh <app> latest                # 恢复最新一份
+#   ./scripts/restore-apps.sh <app> <backup-file>         # 指定文件
+#   ./scripts/restore-apps.sh <backup-file>               # 仅给文件，自动识别 app
+#   ./scripts/restore-apps.sh -l [<app>]                  # 列出备份
 #
 
 set -euo pipefail
@@ -55,6 +57,30 @@ is_valid_app() {
   return 1
 }
 
+# 从备份文件名推断 app 名称
+# 支持:
+#   {app}-YYYYmmdd-HHMMSS.tar.gz
+#   pre-restore-{app}-YYYYmmdd-HHMMSS.tar.gz
+detect_app_from_filename() {
+  local base
+  base="$(basename "$1")"
+  local core="$base"
+  if [[ "$core" == pre-restore-* ]]; then
+    core="${core#pre-restore-}"
+  fi
+  # 去掉 -YYYYmmdd-HHMMSS.tar.gz 后缀
+  local candidate
+  candidate="$(echo "$core" | sed -E 's/-[0-9]{8}-[0-9]{6}\.tar\.gz$//')"
+  if [[ -z "$candidate" || "$candidate" == "$core" ]]; then
+    return 1
+  fi
+  if is_valid_app "$candidate"; then
+    echo "$candidate"
+    return 0
+  fi
+  return 1
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKUP_DIR="$PROJECT_ROOT/backup"
@@ -72,6 +98,7 @@ err()  { echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; }
 usage() {
   cat <<EOF
 用法: $0 [选项] <app> [<备份文件|latest>]
+      $0 [选项] <备份文件>            # 从文件名自动识别 app
       $0 -l [<app>]
 
 选项:
@@ -90,6 +117,7 @@ usage() {
   $0 mysql
   $0 mysql latest --stop
   $0 nexus nexus-20260728-153000.tar.gz -y
+  $0 backup/nexus-20260728-092427.tar.gz   # 自动识别为 nexus
 EOF
   exit 0
 }
@@ -142,17 +170,33 @@ fi
 
 # --- restore 模式 ---
 if [[ ${#POSITIONAL[@]} -lt 1 ]]; then
-  err "必须指定 <app>"
+  err "必须指定 <app> 或 <备份文件>"
   usage
 fi
 
-APP="$(get_pos 0)"
-CHOICE="$(get_pos 1)"
+ARG0="$(get_pos 0)"
+ARG1="$(get_pos 1)"
 
-if ! is_valid_app "$APP"; then
-  err "未知的 app: $APP"
-  err "可用: ${ALL_APPS[*]}"
-  exit 1
+APP=""
+CHOICE=""
+
+# 情况 1: 第一个参数就是合法 app 名
+if is_valid_app "$ARG0"; then
+  APP="$ARG0"
+  CHOICE="$ARG1"
+else
+  # 情况 2: 第一个参数可能是文件路径 / 文件名，尝试识别 app
+  detected=""
+  if detected="$(detect_app_from_filename "$ARG0" 2>/dev/null)"; then
+    APP="$detected"
+    CHOICE="$ARG0"
+    log "从文件名识别到 app: $APP"
+  else
+    err "未知的 app: $ARG0"
+    err "可用: ${ALL_APPS[*]}"
+    err "或直接传入形如 <app>-YYYYmmdd-HHMMSS.tar.gz 的备份文件"
+    exit 1
+  fi
 fi
 
 if [[ ! -d "$BACKUP_DIR" ]]; then
@@ -206,12 +250,18 @@ resolve_backup_file() {
     return 0
   fi
 
-  # 显式文件名
+  # 显式文件名 / 路径
   if [[ -f "$sel" ]]; then
     echo "$sel"; return 0
   fi
   if [[ -f "$BACKUP_DIR/$sel" ]]; then
     echo "$BACKUP_DIR/$sel"; return 0
+  fi
+  # 尝试用 basename 在 BACKUP_DIR 中查找
+  local bn
+  bn="$(basename "$sel")"
+  if [[ -f "$BACKUP_DIR/$bn" ]]; then
+    echo "$BACKUP_DIR/$bn"; return 0
   fi
   err "找不到备份文件: $sel"
   return 1
@@ -280,6 +330,7 @@ fi
 # 2) 安全备份当前数据
 SAFETY_FILE=""
 if [[ "$DO_SAFETY" -eq 1 ]]; then
+  mkdir -p "$BACKUP_DIR"
   SAFETY_TS="$(date +%Y%m%d-%H%M%S)"
   SAFETY_FILE="$BACKUP_DIR/pre-restore-${APP}-${SAFETY_TS}.tar.gz"
   existing=()
