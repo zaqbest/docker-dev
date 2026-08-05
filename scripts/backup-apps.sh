@@ -39,7 +39,7 @@ app_paths() {
     mysql)         echo "mysql/data" ;;
     nexus)         echo "nexus/data" ;;
     solr)          echo "solr/data solr/zk/data solr/zk/datalog" ;;
-    gitea)          echo "gitea/app_data gitea/zk/datalog" ;;
+    gitea)          echo "gitea/app_data gitea/db_data" ;;
     *)             return 1 ;;
   esac
 }
