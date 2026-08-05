@@ -25,7 +25,7 @@
 set -euo pipefail
 
 # --- 配置区：所有已注册的 app ---
-ALL_APPS=(consul danmu-server elasticsearch h2 kafka mysql nexus solr)
+ALL_APPS=(consul danmu-server elasticsearch h2 kafka mysql nexus solr gitea)
 
 # app -> 需要备份的相对路径（多个用空格）
 # 路径来源：各 docker-compose-*.yml 中的 volumes 声明
@@ -39,6 +39,7 @@ app_paths() {
     mysql)         echo "mysql/data" ;;
     nexus)         echo "nexus/data" ;;
     solr)          echo "solr/data solr/zk/data solr/zk/datalog" ;;
+    gitea)          echo "gitea/app_data gitea/zk/datalog" ;;
     *)             return 1 ;;
   esac
 }
@@ -54,6 +55,7 @@ app_compose() {
     mysql)         echo "docker-compose-mysql.yml" ;;
     nexus)         echo "docker-compose-nexus.yml" ;;
     solr)          echo "docker-compose-solr.yml" ;;
+    gitea)          echo "docker-compose-gitea.yml" ;;
     *)             return 1 ;;
   esac
 }

@@ -19,7 +19,7 @@
 set -euo pipefail
 
 # --- 与 backup-apps.sh 保持一致 ---
-ALL_APPS=(consul danmu-server elasticsearch h2 kafka mysql nexus solr)
+ALL_APPS=(consul danmu-server elasticsearch h2 kafka mysql nexus solr gitea)
 
 app_paths() {
   case "$1" in
@@ -31,6 +31,7 @@ app_paths() {
     mysql)         echo "mysql/data" ;;
     nexus)         echo "nexus/data" ;;
     solr)          echo "solr/data solr/zk/data solr/zk/datalog" ;;
+    gitea)         echo "gitea/app_data gitea/db_data" ;;
     *)             return 1 ;;
   esac
 }
@@ -45,6 +46,7 @@ app_compose() {
     mysql)         echo "docker-compose-mysql.yml" ;;
     nexus)         echo "docker-compose-nexus.yml" ;;
     solr)          echo "docker-compose-solr.yml" ;;
+    gitea)         echo "docker-compose-gitea.yml" ;;
     *)             return 1 ;;
   esac
 }
