@@ -1,0 +1,37 @@
+# Gitea Git 服务
+# 证书：由 ${GITEA_SSL_PROFILE} 选择（letsencrypt / selfsigned），对应 certs/<profile>/server.{crt,key}
+# 域名从根 .env 注入：${GITEA_HOSTNAME}
+# 容器启动时 nginx 自动 envsubst 生成 /etc/nginx/conf.d/gitea.conf。
+
+server {
+    listen 443 ssl;
+    server_name ${GITEA_HOSTNAME};
+
+    include /etc/nginx/snippets/ssl-${GITEA_SSL_PROFILE}.conf;
+
+    # Git push/pull 可能包含较大对象，适当放大
+    client_max_body_size 500m;
+
+    # 使用 Docker 内部 DNS，启动时不依赖上游容器
+    resolver 127.0.0.11 valid=30s;
+    set $upstream_gitea http://gitea:3000;
+
+    include /etc/nginx/snippets/error-pages.conf;
+
+    location / {
+        proxy_pass         $upstream_gitea;
+        include            /etc/nginx/snippets/proxy-headers.conf;
+
+        # 支持 Git HTTP 长连接（大仓库 clone/push）
+        proxy_read_timeout  300s;
+        proxy_send_timeout  300s;
+
+        proxy_intercept_errors off;
+    }
+}
+
+server {
+    listen 80;
+    server_name ${GITEA_HOSTNAME};
+    return 301 https://$host$request_uri;
+}
