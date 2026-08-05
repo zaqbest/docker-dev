@@ -21,7 +21,7 @@ services:
 
   gitea:
     image: gitea/gitea:1.23.7
-    container_name: gitea
+    hostname: gitea
     restart: unless-stopped
     env_file:
       - env/gitea.env
