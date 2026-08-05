@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${GITEA_DB_PASSWORD:-gitea123456}
       TZ: Asia/Shanghai
     volumes:
-      - gitea_db_data:/var/lib/postgresql/data
+      - ./gitea/db_data:/var/lib/postgresql/data
     networks:
       - docker-kit-network
     healthcheck:
@@ -37,7 +37,7 @@ services:
       # 宿主机 2222 -> 容器内 2222（Gitea 内置 SSH，避开系统 sshd 的 22）
       - "${GITEA_SSH_PORT:-2222}:2222"
     volumes:
-      - gitea_data:/data
+      - ./gitea/app_data:/data
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
     networks:
@@ -51,12 +51,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-
-volumes:
-  gitea_data:
-    driver: local
-  gitea_db_data:
-    driver: local
 
 networks:
   docker-kit-network:
