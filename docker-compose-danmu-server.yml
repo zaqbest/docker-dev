@@ -42,7 +42,7 @@ services:
       - docker-kit-network
     mem_limit: 512m
   danmu-server:
-    image: l429609201/misaka_danmu_server:v2.8.3
+    image: l429609201/misaka_danmu_server:v2.8.4
     restart: unless-stopped
     environment:
       - PUID=1000
